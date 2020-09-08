@@ -7,7 +7,7 @@ void * x_shmem_open(const char * name, int flag, size_t sz, int * s_fd);
 
 int    x_shmem_lock(void * m_buf);
 
-int    x_shmem_unlock(void * m_buf);
+int    x_shmem_unlock(void * m_buf, int wake_flag);
 
 int    x_shmem_write(void * m_buf, size_t offset, void * w_buf,size_t w_size);
 

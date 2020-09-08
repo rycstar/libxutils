@@ -12,7 +12,8 @@
 #define X_SHMEM_SERIAL_UNLOCKED(serial) (!(X_SHMEM_SERIAL_LOCKED(serial)))
 
 #define X_SHMEM_SERIAL_NO_UPDATE(serial, old_serial) (!((serial^old_serial) & 0xFFFF0000u))
-
+#define X_SHMEM_GET_WRITE_COUNT(serial) ((serial >> 16) & 0x0000FFFFu)
+#define X_SHMEM_SET_WRITE_COUNT(serial,count) (((count) << 16) | ((serial) & 0x0000FFFFu))
 
 typedef struct _shmem_data{
     atomic_uint serial;/*For data sync in processes*/
@@ -96,8 +97,8 @@ int    x_shmem_lock(void * m_buf){
     return 0;
 }
 
-int    x_shmem_unlock(void * m_buf){
-    uint32_t serial = 0;
+int    x_shmem_unlock(void * m_buf, int wake_flag){
+    uint32_t serial = 0, write_count = 0;
     tShmemData *sd = x_container_of((const char *)m_buf, tShmemData, data);
 
     serial = atomic_load_explicit(&sd->serial, memory_order_acquire);
@@ -105,6 +106,12 @@ int    x_shmem_unlock(void * m_buf){
         /*is unlock state, return*/
         return 0;
     }
+
+    if(wake_flag){
+        write_count = X_SHMEM_GET_WRITE_COUNT(serial);
+        serial = X_SHMEM_SET_WRITE_COUNT(serial, ++write_count);
+    }
+    
     serial &= (~SERIAL_LOCK_VAL);
     atomic_store_explicit(&sd->serial, serial, memory_order_release);
     sys_futex(&sd->serial, FUTEX_WAKE,INT_MAX,NULL,NULL,0);
@@ -127,8 +134,8 @@ int    x_shmem_write(void * m_buf, size_t offset, void * w_buf,size_t w_size){
     serial |= SERIAL_LOCK_VAL;
     atomic_store_explicit(&sd->serial, serial, memory_order_release);
     memcpy(sd->data + offset , w_buf, w_size);
-    write_count = (serial >> 16) & 0x0000FFFFu;
-    serial = ((++write_count) << 16) & 0xFFFF0000u;
+    write_count = X_SHMEM_GET_WRITE_COUNT(serial);
+    serial = X_SHMEM_SET_WRITE_COUNT(serial, ++write_count);
     serial &= (~SERIAL_LOCK_VAL);
     atomic_store_explicit(&sd->serial, serial, memory_order_release);
     sys_futex(&sd->serial, FUTEX_WAKE,INT_MAX,NULL,NULL,0);
