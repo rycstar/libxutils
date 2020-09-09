@@ -50,4 +50,7 @@ static inline int sys_futex(void *addr1, int op, int val1, struct timespec *time
 	return res;
 }
 
+
+struct timespec * timeoutCalc(int timeout, struct timespec * timespec_, struct timespec * now);
+
 #endif

@@ -4,7 +4,9 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <time.h>
+#include <stdatomic.h>
 #include "x_shmem.h"
+#include "x_util_common.h"
 
 #define SERIAL_LOCK_VAL (0x01u)
 
@@ -22,14 +24,14 @@ typedef struct _shmem_data{
 }__attribute__((packed))tShmemData;
 
 
-static struct timespec * timeoutCalc(int timeout, struct timespec * timespec_){
+/*struct timespec * timeoutCalc(int timeout, struct timespec * timespec_){
 	if(timeout > 0 && timespec_){
 		timespec_->tv_sec = timeout / 1000; 
 		timespec_->tv_nsec = (1000 * 1000) * (timeout % 1000);
 		return timespec_;
 	}
 	return NULL;
-}
+}*/
 
 
 /*
@@ -180,7 +182,7 @@ int     x_shmem_listen(void * m_buf,uint32_t old_serial, int timeout){
     serial = atomic_load_explicit(&sd->serial, memory_order_acquire);
 
     do{
-		if((rc = sys_futex(&sd->serial, FUTEX_WAIT,tmp_serial,timeoutCalc(timeout,&ts),NULL,0)) != 0 && rc != -ETIMEDOUT){
+		if((rc = sys_futex(&sd->serial, FUTEX_WAIT,tmp_serial,timeoutCalc(timeout,&ts,NULL),NULL,0)) != 0 && rc == -ETIMEDOUT){
 			return -1;
 		}
 		tmp_serial = atomic_load_explicit(&sd->serial,memory_order_acquire);

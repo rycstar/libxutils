@@ -1,7 +1,7 @@
 #ifndef __X_SHMEM_H__
 #define __X_SHMEM_H__
-#include <stdatomic.h>
-#include "x_util_common.h"
+
+#include <stdint.h>
 
 void * x_shmem_open(const char * name, int flag, size_t sz, int * s_fd);
 
