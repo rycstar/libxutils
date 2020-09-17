@@ -19,7 +19,11 @@
 #define X_MEMSET(p,v,s)   memset(p,v,s)
 #define X_MEMCPY(p,v,s)  memcpy(p,v,s)
 
-#define IS_POW_OF_2(x) !((x) & ((x) - 1))
+
+#define X_MIN(a,b) (((a) < (b)) ? (a) : (b))
+#define X_MAX(a,b) (((a) < (b)) ? (b) : (a))
+
+#define IS_POW_OF_2(x) (!((x) & ((x) - 1)))
 
 #define x_offsetof(TYPE, MEMBER) ((size_t)&((TYPE*)0)->MEMBER)
 
