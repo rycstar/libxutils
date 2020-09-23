@@ -29,6 +29,17 @@ void listAppend(void * data, tLinkList * list){
     }
 }
 
+/*
+* get the first node of the linkedlist
+* caller should free the node
+*/
+tNode * listPoll(tLinkList * list){
+    tNode * current = list->head;
+    if(current) list->head = current->next;
+    return current;
+}
+
+
 void listReverse(tLinkList * list){
     tNode * reversed = NULL;
     tNode * current = list->head;
