@@ -15,10 +15,17 @@ tGenTreeNode * gen_tree_add_child(tGenTreeNode * node, void * data);
 DFS search
 */
 int gen_tree_depth_traverse(tGenTreeNode * node, gen_tree_cb cb, void * pri);
+
+int gen_tree_post_traverse(tGenTreeNode * root_node, gen_tree_cb cb, void * pri);
+
+
 /*
 * BFS search
 */
 int gen_tree_breadth_traverse(tGenTreeNode * root_node, gen_tree_cb cb, void * pri);
+
+
+int gen_tree_find(tGenTreeNode * root_node, tGenTreeNode * target_node, int * found);
 
 #endif
 

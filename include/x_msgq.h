@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 
+#define MSGQ_OPEN_MODE_WRITE (0x01 << 0)
+#define MSGQ_OPEN_MODE_PRIV (0x01 << 1)
 
 int x_msgq_open(const char* name, int flag);
 

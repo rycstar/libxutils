@@ -15,6 +15,10 @@
 *
 * In embeded system, user can modify msgq limit through /proc/sys/fs/mqueue/msg_max and etc...
 * I think msg_max = 64, msgsize_max= 1280 should be better.
+
+*Disadvantage: Posix message queue don't support private mode, so sad...
+*For private mode, you should use System V message queue
+*
 */
 
 #define POSIX_MSGQ_PATH "/dev/mqueue"
@@ -26,7 +30,7 @@ int x_msgq_open(const char* name, int flag){
         printf("Error: directory <%s> not exist,please create it!\n",POSIX_MSGQ_PATH);
         return -1;
     }
-    if(flag) o_flag |= O_CREAT;
+    if(flag & MSGQ_OPEN_MODE_WRITE) o_flag |= O_CREAT;
     
     msgq_id = mq_open(name, o_flag, 0666, NULL);
     if(msgq_id <= 0){
