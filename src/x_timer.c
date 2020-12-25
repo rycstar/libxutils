@@ -1,13 +1,27 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/timerfd.h>
+#include <sys/prctl.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <pthread.h>
 #include <poll.h>
 #include <stdio.h>
-
+#include <fcntl.h>
+#include <unistd.h> 
 #include "x_timer.h"
 
-#define MAX_TIMER_COUNT 1000
+#define MAX_TIMER_COUNT 128
+
+typedef enum{
+	X_TIMER_UNUSED = 0,
+	X_TIMER_ADD,
+	X_TIMER_DEL,
+	X_TIMER_ENABLE,
+	X_TIMER_DISABLE,
+	X_TIMER_DEL_ALL,
+	X_TIMER_INVALID
+}eTimerEvt;
 
 struct timer_node
 {
@@ -16,47 +30,70 @@ struct timer_node
     void *              user_data;
     unsigned int        interval;
     t_timer             type;
+	int 				active;
     struct timer_node * next;
 };
 
-static void * _timer_thread(void * data);
-static pthread_t g_thread_id;
-static struct timer_node *g_head = NULL;
 
-int initialize()
+static int _timer_evt_send(int fd, eTimerEvt evt, size_t code){
+	size_t evt_packet[2];
+	evt_packet[0] = evt;
+	evt_packet[1] = code;
+	if(fd > 0)
+		return write(fd, evt_packet, sizeof(evt_packet));
+	return 0;
+}
+static void * _timer_thread(void * data);
+
+tXtimerManager* x_timer_initialize()
 {
-    if(pthread_create(&g_thread_id, NULL, _timer_thread, NULL))
+	tXtimerManager * new_timer_manager = (tXtimerManager * )malloc(sizeof(tXtimerManager));
+	
+	if(!new_timer_manager) return NULL;
+	
+	memset(new_timer_manager, 0, sizeof(tXtimerManager));
+	
+	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, &(new_timer_manager->controlFdR))){
+		goto fail;
+	}
+	
+    if(pthread_create(&(new_timer_manager->p_id), NULL, _timer_thread, new_timer_manager))
     {
-        /*Thread creation failed*/
-        return 0;
+        goto fail;
     }
 
-    return 1;
+    return new_timer_manager;
+fail:
+	if(new_timer_manager){
+		if(new_timer_manager->controlFdR > 0) close(new_timer_manager->controlFdR);
+		if(new_timer_manager->controlFdW > 0) close(new_timer_manager->controlFdW);
+		free(new_timer_manager);
+	}
+	return NULL;
 }
 
-size_t start_timer(unsigned int interval, time_handler handler, t_timer type, void * user_data)
-{
-    struct timer_node * new_node = NULL;
+void * x_timer_add(tXtimerManager * timer_mag, unsigned int interval, time_handler handler, t_timer type, void * user_data, int active){
+	struct timer_node * new_node = NULL;
     struct itimerspec new_value;
 
     new_node = (struct timer_node *)malloc(sizeof(struct timer_node));
 
-    if(new_node == NULL) return 0;
-
-    new_node->callback  = handler;
+    if(!new_node || ! timer_mag) return NULL;
+	memset(new_node, 0, sizeof(struct timer_node));
+	new_node->callback  = handler;
     new_node->user_data = user_data;
     new_node->interval  = interval;
     new_node->type      = type;
-
-    new_node->fd = timerfd_create(CLOCK_REALTIME, 0);
-
-    if (new_node->fd == -1)
+	new_node->active    = active;
+	
+	new_node->fd = timerfd_create(CLOCK_REALTIME, 0);
+	if (new_node->fd == -1)
     {
         free(new_node);
-        return 0;
+        return NULL;
     }
-   
-    new_value.it_value.tv_sec = interval / 1000;
+	
+	new_value.it_value.tv_sec = interval / 1000;
     new_value.it_value.tv_nsec = (interval % 1000)* 1000000;
 
     if (type == TIMER_PERIODIC)
@@ -71,70 +108,101 @@ size_t start_timer(unsigned int interval, time_handler handler, t_timer type, vo
     }
 
     timerfd_settime(new_node->fd, 0, &new_value, NULL);
+	
+	_timer_evt_send(timer_mag->controlFdW, X_TIMER_ADD, (size_t)new_node);
 
-    /*Inserting the timer node into the list*/
-    new_node->next = g_head;
-    g_head = new_node;
-
-    return (size_t)new_node;
+    return (void *)new_node;
 }
 
-void stop_timer(size_t timer_id)
-{
-    struct timer_node * tmp = NULL;
-    struct timer_node * node = (struct timer_node *)timer_id;
-
-    if (node == NULL) return;
-
-    close(node->fd);
-
-    if(node == g_head)
-    {
-        g_head = g_head->next;
-    } else {
-
-        tmp = g_head;
-
-        while(tmp && tmp->next != node) tmp = tmp->next;
-
-        if(tmp)
-        {
-            /*tmp->next can not be NULL here.*/
-            tmp->next = tmp->next->next;
-        }
-    }
-    if(node) free(node);
+void x_timer_set_state(tXtimerManager * timer_mag, void * t_id, int active){
+	int fd = timer_mag->controlFdW;
+	if(active){
+		_timer_evt_send(fd, X_TIMER_ENABLE, (size_t)t_id);
+	}else{
+		_timer_evt_send(fd, X_TIMER_DISABLE, (size_t)t_id);
+	}
 }
 
-void finalize()
+void x_timer_del(tXtimerManager * timer_mag, void * t_id)
 {
-    while(g_head) stop_timer((size_t)g_head);
-
-    pthread_cancel(g_thread_id);
-    pthread_join(g_thread_id, NULL);
+	int fd = timer_mag->controlFdW;
+	
+	_timer_evt_send(fd, X_TIMER_DEL, (size_t)t_id);
 }
 
-struct timer_node * _get_timer_from_fd(int fd)
+void x_timer_finalize(tXtimerManager * timer_mag)
 {
-    struct timer_node * tmp = g_head;
-    
-    while(tmp)
-    {
-        if(tmp->fd == fd) return tmp;
+	if(!timer_mag) return;
+	
+	_timer_evt_send(timer_mag->controlFdW, X_TIMER_DEL_ALL, (size_t)0);
+	
+    pthread_cancel(timer_mag->p_id);
+    pthread_join(timer_mag->p_id, NULL);
+	
+	if(timer_mag->controlFdR > 0) close(timer_mag->controlFdR);
+	if(timer_mag->controlFdW > 0) close(timer_mag->controlFdW);
+	free(timer_mag);
+}
 
-        tmp = tmp->next;
-    }
-    return NULL;
+static void _timer_control_handle(tXtimerManager * timer_mag, size_t * msg){
+	struct timer_node * tmp = timer_mag->list_head, *node = NULL;
+	
+	node = (struct timer_node *)msg[1];
+	switch(msg[0]){
+		case 	X_TIMER_ADD:
+			if(node){
+				node->next = timer_mag->list_head;
+				timer_mag->list_head = node;
+			}
+			break;
+		case    X_TIMER_DEL:
+			if(node){
+				if(node == tmp){
+					timer_mag->list_head = (void *)tmp->next;
+				}else{
+					while(tmp && tmp->next != node) tmp = tmp->next;
+					if(tmp) tmp->next = tmp->next->next;
+				}
+				close(node->fd);
+				free(node);
+			}
+			break;
+		case    X_TIMER_ENABLE:
+			/*should find the node in the list first*/
+			node->active = 1;
+			break;
+	    case    X_TIMER_DISABLE:
+			/*should find the node in the list first*/
+			node->active = 0;
+			break;
+	    case    X_TIMER_DEL_ALL:
+			while(tmp){
+				node = tmp;
+				tmp = tmp->next;
+				close(node->fd);
+				free(node);
+			}
+			break;
+		default:
+			printf("Warning: we should not receive this msg\n");
+			break;
+	}
+	
 }
 
 void * _timer_thread(void * data)
 {
     struct pollfd ufds[MAX_TIMER_COUNT] = {{0}};
+	struct timer_node * timer_node[MAX_TIMER_COUNT] = {0};
     int iMaxCount = 0;
     struct timer_node * tmp = NULL;
     int read_fds = 0, i, s;
     uint64_t exp;
-
+	size_t evt_packet[2];
+	
+	tXtimerManager * timer_mag = (tXtimerManager *)data;
+	prctl(PR_SET_NAME, "timer_manager");
+	
     while(1)
     {
         pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -142,22 +210,36 @@ void * _timer_thread(void * data)
         pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 
         iMaxCount = 0;
-        tmp = g_head;
-
         memset(ufds, 0, sizeof(struct pollfd)*MAX_TIMER_COUNT);
-        while(tmp)
+		memset(timer_node, 0, sizeof(struct timer_node *) *MAX_TIMER_COUNT);
+		
+		ufds[0].fd = timer_mag->controlFdR;
+		ufds[0].events = POLLIN;
+		iMaxCount++;
+		
+		tmp = timer_mag->list_head;
+        while(tmp && iMaxCount < MAX_TIMER_COUNT)
         {
-            ufds[iMaxCount].fd = tmp->fd;
-            ufds[iMaxCount].events = POLLIN;
-            iMaxCount++;
+			ufds[iMaxCount].fd = tmp->fd;
+			ufds[iMaxCount].events = POLLIN;
+			timer_node[iMaxCount] = tmp;
+			iMaxCount++;
 
             tmp = tmp->next;
         }
-        read_fds = poll(ufds, iMaxCount, 100);
+        read_fds = poll(ufds, iMaxCount, 20);
 
         if (read_fds <= 0) continue;
-
-        for (i = 0; i < iMaxCount; i++)
+		
+		/*control msg handle*/
+		if(ufds[0].revents & POLLIN){
+			s = read(ufds[0].fd, evt_packet, sizeof(evt_packet));
+			if (s == sizeof(evt_packet)){
+				_timer_control_handle(timer_mag, evt_packet);
+			}
+		}
+		
+        for (i = 1; i < iMaxCount; i++)
         {
             if (ufds[i].revents & POLLIN)
             {
@@ -165,9 +247,9 @@ void * _timer_thread(void * data)
 
                 if (s != sizeof(uint64_t)) continue;
 
-                tmp = _get_timer_from_fd(ufds[i].fd);
+                tmp = timer_node[i];
 
-                if(tmp && tmp->callback) tmp->callback((size_t)tmp, tmp->user_data);
+                if(tmp && tmp->active && tmp->callback) tmp->callback((void*)tmp, tmp->user_data);
             }
         }
     }
