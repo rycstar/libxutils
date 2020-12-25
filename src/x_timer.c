@@ -34,6 +34,24 @@ struct timer_node
     struct timer_node * next;
 };
 
+static void _timer_set_time(int fd, unsigned int interval, t_timer type){
+	struct itimerspec new_value;
+	new_value.it_value.tv_sec = interval / 1000;
+    new_value.it_value.tv_nsec = (interval % 1000)* 1000000;
+
+    if (type == TIMER_PERIODIC)
+    {
+      new_value.it_interval.tv_sec= interval / 1000;
+      new_value.it_interval.tv_nsec = (interval %1000) * 1000000;
+    }
+    else
+    {
+      new_value.it_interval.tv_sec= 0;
+      new_value.it_interval.tv_nsec = 0;
+    }
+
+    timerfd_settime(fd, 0, &new_value, NULL);
+}
 
 static int _timer_evt_send(int fd, eTimerEvt evt, size_t code){
 	size_t evt_packet[2];
@@ -74,7 +92,7 @@ fail:
 
 void * x_timer_add(tXtimerManager * timer_mag, unsigned int interval, time_handler handler, t_timer type, void * user_data, int active){
 	struct timer_node * new_node = NULL;
-    struct itimerspec new_value;
+    
 
     new_node = (struct timer_node *)malloc(sizeof(struct timer_node));
 
@@ -86,28 +104,19 @@ void * x_timer_add(tXtimerManager * timer_mag, unsigned int interval, time_handl
     new_node->type      = type;
 	new_node->active    = active;
 	
-	new_node->fd = timerfd_create(CLOCK_REALTIME, 0);
+	new_node->fd = timerfd_create(CLOCK_MONOTONIC, O_CLOEXEC);
+	
 	if (new_node->fd == -1)
     {
         free(new_node);
         return NULL;
     }
 	
-	new_value.it_value.tv_sec = interval / 1000;
-    new_value.it_value.tv_nsec = (interval % 1000)* 1000000;
-
-    if (type == TIMER_PERIODIC)
-    {
-      new_value.it_interval.tv_sec= interval / 1000;
-      new_value.it_interval.tv_nsec = (interval %1000) * 1000000;
-    }
-    else
-    {
-      new_value.it_interval.tv_sec= 0;
-      new_value.it_interval.tv_nsec = 0;
-    }
-
-    timerfd_settime(new_node->fd, 0, &new_value, NULL);
+	if(active){
+		_timer_set_time(new_node->fd, new_node->interval, new_node->type);
+	}else{
+		_timer_set_time(new_node->fd, 0, new_node->type);
+	}
 	
 	_timer_evt_send(timer_mag->controlFdW, X_TIMER_ADD, (size_t)new_node);
 
@@ -169,10 +178,12 @@ static void _timer_control_handle(tXtimerManager * timer_mag, size_t * msg){
 			break;
 		case    X_TIMER_ENABLE:
 			/*should find the node in the list first*/
+			_timer_set_time(node->fd, node->interval, node->type);
 			node->active = 1;
 			break;
 	    case    X_TIMER_DISABLE:
 			/*should find the node in the list first*/
+			_timer_set_time(node->fd, 0, node->type);
 			node->active = 0;
 			break;
 	    case    X_TIMER_DEL_ALL:
@@ -224,7 +235,7 @@ void * _timer_thread(void * data)
 			ufds[iMaxCount].events = POLLIN;
 			timer_node[iMaxCount] = tmp;
 			iMaxCount++;
-
+			
             tmp = tmp->next;
         }
         read_fds = poll(ufds, iMaxCount, 20);
