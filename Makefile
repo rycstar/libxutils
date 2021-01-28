@@ -1,5 +1,4 @@
-#CC=gcc
-CC=arm-linux-gnueabihf-gcc
+CC=$(CROSS_COMPILE)gcc
 CUR_DIR=$(shell pwd)
 CFLAGS:=-Wall -O3
 SRC_PATH:=$(CUR_DIR)/src
